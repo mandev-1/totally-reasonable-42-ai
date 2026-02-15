@@ -1,6 +1,6 @@
 # Agent Smith sandbox image (Section 4.2)
-# Build: docker build -t my-agent-image .
-# Run with: docker run --rm --memory=512m --cpus=1 --pids-limit=128 \
+# Build from agent-smith: docker build -f DOCKER/Dockerfile -t my-agent-image .
+# Run: docker run --rm --memory=512m --cpus=1 --pids-limit=128 \
 #   --read-only --cap-drop=ALL --security-opt=no-new-privileges --network=none \
 #   -v /path/to/task:/testbed --tmpfs /tmp:rw,noexec,nosuid,size=256m \
 #   my-agent-image [sandbox] [config.json]
@@ -12,8 +12,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 WORKDIR /app
 
-# Copy project (pyproject, lock, src)
-COPY EXPLORATIONandDISCOVERY/ ./
+# Copy project (pyproject, lock, scripts)
+COPY pyproject.toml uv.lock ./
+COPY scripts/ ./scripts/
 
 # Install with uv
 RUN uv sync --frozen --no-dev

@@ -1,6 +1,7 @@
 ITT:
 1. [Inference](#inference)
 2. [MicroVM](#microvm)
+3. [Patch](#patch)
 
 
 
@@ -34,3 +35,12 @@ ITT:
 - Example:
 - Similar:
 
+# Patch
+- Found in: `Generate and submit valid patches using ’git -c core.fileMode=false diff’` (Subject)
+<!-- [Link]() -->
+- Defined as: 
+    1. 
+    2. 
+- Origin: 
+- Example:
+- Similar:

@@ -1,7 +1,24 @@
 [project]
-name = "agent-smith"
+name = "totally-reasonable-42-ai"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "42 AI agent project"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "openai>=1.0",
+    "moulinette-master",
+]
+
+[tool.uv.sources]
+moulinette-master = { path = "moulinette_master" }
+
+[project.scripts]
+sandbox = "scripts.sandbox_docker:main"
+mcp = "scripts.mcp_cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scripts", "agent_mbpp", "MCP"]

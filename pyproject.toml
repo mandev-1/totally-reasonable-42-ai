@@ -1,0 +1,22 @@
+[project]
+name = "totally-reasonable-42-ai"
+version = "0.1.0"
+description = "42 AI agent project"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+sandbox = "scripts.sandbox_docker:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scripts"]
+
+[tool.uv.workspace]
+members = [
+    "agent-smith",
+]

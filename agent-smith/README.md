@@ -133,9 +133,8 @@ defining pyproject.toml to run `uv run sandbox`
 
 - [ ] Write Executable Python code, Execute in Sandbox, Observe, Compare
 - [ ] Prerequisites:  
-      - init (uv file)
-      - LLM  
       - Sandbox  
+      - LLM  
 
 
 ---- page 3 ---- 

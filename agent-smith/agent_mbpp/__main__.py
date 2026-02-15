@@ -11,7 +11,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from agent_mbpp.pydantic_models import MBPPTaskInput, SolutionOutput, StepMetrics
+from tools.pydantic_models import MBPPTaskInput, SolutionOutput, StepMetrics
 
 DEFAULT_MCP_URL = "http://localhost:8765"
 

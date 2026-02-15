@@ -14,6 +14,20 @@ class MBPPTaskInput(BaseModel):
     test_list: List[str] = Field(default_factory=list)
 
 
+class SWEBenchTaskInput(BaseModel):
+    """Input for SWE-bench task evaluation.
+    You are responsible for pulling and managing the Docker container.
+    The docker_image field contains the full image name to pull.
+    The eval_script is used to run tests inside the container.
+    """
+    instance_id: str
+    repo: str = ""
+    docker_image: str # Full image name, e.g., "swebench/sweb.eval.x86_64.sympy_1776_sympy-23534:latest"
+    problem_statement: str
+    hints_text: str = ""
+    eval_script: str # Bash script to run tests inside the container
+
+
 class StepMetrics(BaseModel):
     """Metrics for a single agent step."""
     step: int

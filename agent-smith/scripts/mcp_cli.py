@@ -14,8 +14,8 @@ def main():
         print("Usage: uv run mcp <server> [options]")
         print("  mbpp     Start MBPP MCP server (run_tests tool)")
         print("           Default: http://localhost:8765")
-        print("  swebench Start SWE-bench MCP server (file_system, code_search, execution)")
-        print("           Default: http://localhost:8766")
+        print("  swe_tools Start SWE-tools MCP server (file_system, code_search, execution)")
+        print("            Default: http://localhost:8766")
         sys.exit(1)
 
     server = sys.argv[1].lower()
@@ -27,15 +27,15 @@ def main():
             args = ["--port", "8765"] + args
         sys.argv = ["mcp"] + args
         mbpp_main()
-    elif server == "swebench":
-        from MCP.swebench import main as swebench_main
+    elif server == "swe_tools":
+        from MCP.swe_tools import main as swe_tools_main
         if "--port" not in args and "-p" not in args:
             args = ["--port", "8766"] + args
         sys.argv = ["mcp"] + args
-        swebench_main()
+        swe_tools_main()
     else:
         print(f"Unknown server: {server}")
-        print("Available: mbpp, swebench")
+        print("Available: mbpp, swe_tools")
         sys.exit(1)
 
 

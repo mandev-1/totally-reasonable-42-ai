@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SWE-bench-tools MCP server - file system, code search, and execution tools."""
+"""SWE-tools MCP server - file system, code search, and execution tools."""
 import argparse
 import json
 import os
@@ -208,7 +208,7 @@ def handle_request(request: dict) -> dict:
             "id": request_id,
             "result": {
                 "protocolVersion": "2024-11-05",
-                "serverInfo": {"name": "swebench-mcp-server", "version": "1.0.0"},
+                "serverInfo": {"name": "swe-tools-mcp-server", "version": "1.0.0"},
                 "capabilities": {"tools": {}},
             },
         }
@@ -247,7 +247,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
 def run_http(port: int = 8766):
     """Run MCP server on HTTP."""
     server = HTTPServer(("localhost", port), MCPHTTPHandler)
-    print(f"SWE-bench MCP server running on http://localhost:{port}", file=sys.stderr)
+    print(f"SWE-tools MCP server running on http://localhost:{port}", file=sys.stderr)
     print(f"Set TESTBED_PATH for testbed root. Connect with: uv run sandbox --mcp-server http://localhost:{port}", file=sys.stderr)
     try:
         server.serve_forever()
@@ -257,7 +257,7 @@ def run_http(port: int = 8766):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SWE-bench MCP server")
+    parser = argparse.ArgumentParser(description="SWE-tools MCP server")
     parser.add_argument("--port", type=int, default=8766, help="HTTP port (default: 8766)")
     args = parser.parse_args()
     run_http(args.port)

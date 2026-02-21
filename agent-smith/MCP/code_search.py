@@ -13,7 +13,7 @@ def _format_match(filepath: Path, line_num: int, content: str) -> str:
 
 def search_code(base_path: str, pattern: str, file_pattern: str = "*.py") -> str:
     """
-    Grep-like search. Output format: /absolute/path/file.py:line_number line_content
+    Perform grep-like search in the entire codebase. Output format: /absolute/path/file.py:line_number line_content
     """
     base = _resolve_base(base_path)
     if not base.exists():

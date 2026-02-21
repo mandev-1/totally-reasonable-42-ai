@@ -122,6 +122,14 @@ def handle_tools_call(params: dict, request_id: int) -> dict:
             )
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(r)}]}}
 
+        elif tool_name == "run_python_snippet":
+            r = execution.run_python_snippet(
+                base_path,
+                arguments.get("code", ""),
+                arguments.get("timeout", 60),
+            )
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(r)}]}}
+
         elif tool_name == "run_root_cause_analysis":
             r = execution.run_root_cause_analysis(
                 base_path,
@@ -142,12 +150,13 @@ def handle_tools_call(params: dict, request_id: int) -> dict:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": str(e)}}
 
 
-# SWE-bench optimized. recommended_workflow: get_repo_tree -> find_relevant -> search_symbol -> read_file -> edit_file -> get_patch -> run_tests
+# SWE-bench optimized. recommended_workflow:
+# root analysis -> list_files/search_code -> read/edit -> run_tests -> RCA-on-fail -> get_patch
 
 TOOLS = [
     {
         "name": "get_repo_tree",
-        "description": "FIRST STEP for most tasks. Returns indented tree of the repository to understand structure and locate likely source/test directories. Use before reading files to avoid blind exploration.",
+        "description": "UTILITY ONLY. Returns indented tree of the repository to understand structure. Prefer list_files/search_code first; use this only when targeted exploration is insufficient.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -195,7 +204,7 @@ TOOLS = [
     },
     {
         "name": "list_files",
-        "description": "List files in a directory matching a glob pattern. Useful when you already know the relevant directory and want to filter by extension (e.g. *.py, test_*.py). Prefer get_repo_tree for initial exploration.",
+        "description": "Primary structure tool. List files in a directory matching a glob pattern to quickly scope code/test locations before read_file.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -221,7 +230,7 @@ TOOLS = [
     },
     {
         "name": "read_file",
-        "description": "Read file content with line numbers (<line_number>: <line_content>). Use only after narrowing down likely relevant files via get_repo_tree, find_relevant, or search_code. Avoid reading large files entirely — prefer specifying start_line and end_line when possible.",
+        "description": "Read file content with line numbers (<line_number>: <line_content>). Use only after narrowing down likely relevant files via list_files/find_relevant/search_code. Avoid reading large files entirely — prefer specifying start_line and end_line when possible.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -285,7 +294,7 @@ TOOLS = [
     },
     {
         "name": "run_tests",
-        "description": "Run the test suite using the provided evaluation script. Use after implementing a plausible fix. Avoid repeated runs without narrowing scope — tests are expensive. Returns structured JSON with success/message/output/patch and failure_summary on failures.",
+        "description": "Run the test suite using the provided evaluation script. Use after implementing a plausible fix. Do NOT use run_tests for print/debug introspection; use run_python_snippet instead. Returns structured JSON with success/message/output/patch and failure_summary on failures.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -294,6 +303,19 @@ TOOLS = [
                 "timeout": {"type": "integer", "default": 1800},
             },
             "required": ["eval_script"],
+        },
+    },
+    {
+        "name": "run_python_snippet",
+        "description": "Execute a short Python snippet in testbed env for cheap introspection (e.g., print expression args/assumptions). Use this instead of run_tests for debug prints.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "code": {"type": "string"},
+                "timeout": {"type": "integer", "default": 60},
+            },
+            "required": ["code"],
         },
     },
     {
@@ -321,13 +343,18 @@ TOOLS = [
 ]
 
 RECOMMENDED_WORKFLOW = [
-    "get_repo_tree",
+    "write_file",
+    "edit_file",
+    "list_files",
+    "search_code",
     "find_relevant",
     "search_symbol",
     "read_file",
-    "edit_file",
-    "get_patch",
+    "run_python_snippet",
     "run_tests",
+    "run_root_cause_analysis",
+    "get_patch",
+    "get_repo_tree",
 ]
 
 

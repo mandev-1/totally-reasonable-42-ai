@@ -118,6 +118,30 @@ def _run_script(base: Path, script: str, timeout: int) -> dict:
         Path(script_path).unlink(missing_ok=True)
 
 
+def run_python_snippet(base_path: str, code: str, timeout: int = 60) -> dict:
+    """
+    Run a short Python snippet inside testbed env for cheap introspection.
+    Prefer this over full run_tests for print/debug exploration.
+    """
+    if not code.strip():
+        return {"success": False, "output": "Empty code", "message": "Invalid snippet"}
+    base = Path(base_path).resolve()
+    if not base.exists() or not base.is_dir():
+        return {"success": False, "output": f"Invalid testbed path: {base}", "message": "Invalid testbed"}
+    script = (
+        _TEST_BLOCK_HEADER
+        + "python - <<'PY'\n"
+        + code
+        + "\nPY\n"
+    )
+    r = _run_script(base, script, timeout)
+    return {
+        "success": bool(r.get("success")),
+        "output": r.get("output", ""),
+        "message": "Snippet executed" if r.get("success") else "Snippet failed",
+    }
+
+
 def _has_pytest_failures(output: str) -> bool:
     """Return True when pytest output clearly indicates failing tests."""
     for line in output.splitlines():
@@ -300,12 +324,22 @@ def run_root_cause_analysis(
     elif code_citations:
         likely = f"Most likely caused by logic near {code_citations[0]['file']}:{code_citations[0]['line']}."
     else:
-        likely = "Likely caused by behavior mismatch between expected request/header handling and current implementation."
+        likely = "Likely caused by behavior mismatch between expected and inferred return conditions."
+
+    suspected_return_path = ""
+    trigger_condition = ""
+    if code_citations:
+        first = code_citations[0]
+        suspected_return_path = f"{first['file']}:{first['line']}"
+    if evidence_lines:
+        trigger_condition = evidence_lines[0]
 
     return {
         "summary": likely,
         "failing_tests": failing_tests,
         "evidence": evidence_lines,
         "code_citations": code_citations,
+        "suspected_return_path": suspected_return_path or "unknown (inspect nearest return branch)",
+        "trigger_condition": trigger_condition or "unknown (inspect guard that produced wrong boolean)",
         "next_action": "Apply a focused edit_file change at cited location, then run_tests.",
     }

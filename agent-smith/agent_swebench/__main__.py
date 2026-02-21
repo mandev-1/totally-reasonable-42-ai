@@ -119,6 +119,14 @@ def _extract_failed_tests_from_summary(summary: str) -> list[str]:
     return tests[:5]
 
 
+def _first_failing_test_nodeid(summary: str) -> str:
+    tests = _extract_failed_tests_from_summary(summary)
+    if not tests:
+        return ""
+    # Trim trailing failure message if present: "<nodeid> - <message>"
+    return tests[0].split(" - ", 1)[0].strip()
+
+
 def _extract_actionable_failure_output(output: str) -> str:
     """
     Keep failure-relevant test output; drop env/setup noise.
@@ -161,23 +169,104 @@ def _extract_actionable_failure_output(output: str) -> str:
     return "\n".join(test_lines[-120:])
 
 
-# SWE-bench optimized. recommended_workflow: get_repo_tree -> find_relevant -> search_symbol -> read_file -> edit_file -> get_patch -> run_tests
+def _is_root_filepath(filepath: str) -> bool:
+    fp = (filepath or "").strip()
+    return fp in {"ROOT.md", "/testbed/ROOT.md", "./ROOT.md"}
+
+
+def _has_meaningful_root_estimation(text: str) -> bool:
+    content = (text or "").strip()
+    # Require non-trivial analysis, not a placeholder.
+    return len(content) >= 120
+
+
+def _build_top_of_mind_failure_brief(
+    failure_summary: str,
+    failure_output: str,
+    last_edit_file: str,
+) -> str:
+    failing_tests = _extract_failed_tests_from_summary(failure_summary)
+    actionable = _extract_actionable_failure_output(failure_output)
+    parts = [
+        "TOP_OF_MIND: Latest failed test run. Reason about this before choosing next tool.",
+    ]
+    if last_edit_file:
+        parts.append(f"Last edited file: {last_edit_file}")
+    if failing_tests:
+        parts.append(f"Failing tests: {', '.join(failing_tests)}")
+    if failure_summary:
+        parts.append(f"failure_summary:\n{failure_summary[:3000]}")
+    if actionable:
+        parts.append(f"failure_output:\n{actionable[:6000]}")
+    parts.append("Next step: explain likely root cause, then pick a focused edit_file target.")
+    return "\n\n".join(parts)
+
+
+# SWE-bench optimized. recommended_workflow:
+# root analysis in ROOT.md -> list_files/search_code -> read/edit -> run_tests -> RCA-on-fail -> get_patch
 SWEBENCH_TOOLS = [
-    {"type": "function", "function": {"name": "get_repo_tree", "description": "FIRST STEP. Returns indented tree of the repository. Use to understand structure and locate likely source/test directories before reading files.", "parameters": {"type": "object", "properties": {"base_path": {"type": "string"}, "max_depth": {"type": "integer"}, "max_lines": {"type": "integer"}}}}},
+    {"type": "function", "function": {"name": "get_repo_tree", "description": "UTILITY ONLY. Returns an indented tree of the repository. Use only when list_files/search_code cannot locate needed files.", "parameters": {"type": "object", "properties": {"base_path": {"type": "string"}, "max_depth": {"type": "integer"}, "max_lines": {"type": "integer"}}}}},
     {"type": "function", "function": {"name": "find_relevant", "description": "PRIMARY SEARCH. Keywords from problem (e.g. session headers). Prefer over search_code for natural-language bugs.", "parameters": {"type": "object", "properties": {"keywords": {"type": "string"}}, "required": ["keywords"]}}},
     {"type": "function", "function": {"name": "search_symbol", "description": "Find def/class by name. Use after identifying a symbol to jump to implementation.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
     {"type": "function", "function": {"name": "search_code", "description": "Regex search. Use when you know exact pattern. Prefer find_relevant for vague queries.", "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}}},
-    {"type": "function", "function": {"name": "list_files", "description": "List files in directory. Prefer get_repo_tree for initial exploration.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}, "pattern": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "list_files", "description": "Primary structure tool. List files in a directory; use this before get_repo_tree.", "parameters": {"type": "object", "properties": {"directory": {"type": "string"}, "pattern": {"type": "string"}}}}},
     {"type": "function", "function": {"name": "find_references", "description": "Find usages of a symbol. Use to understand impact before editing.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "filepath": {"type": "string"}, "line": {"type": "integer"}}, "required": ["name", "filepath", "line"]}}},
     {"type": "function", "function": {"name": "read_file", "description": "Read file. Use only after narrowing via tree/find_relevant/search. Prefer start_line/end_line for large files.", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}, "start_line": {"type": "integer"}, "end_line": {"type": "integer"}}, "required": ["filepath"]}}},
     {"type": "function", "function": {"name": "edit_file", "description": "Replace exact string. old_str must match exactly. Read first. Use for minimal modifications.", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}, "old_str": {"type": "string"}, "new_str": {"type": "string"}}, "required": ["filepath", "old_str", "new_str"]}}},
     {"type": "function", "function": {"name": "write_file", "description": "Create file. Prefer edit_file for existing files.", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}, "content": {"type": "string"}}, "required": ["filepath", "content"]}}},
     {"type": "function", "function": {"name": "delete_file", "description": "Delete a file if it exists. Used for temporary analysis artifacts.", "parameters": {"type": "object", "properties": {"filepath": {"type": "string"}}, "required": ["filepath"]}}},
     {"type": "function", "function": {"name": "validate_patch", "description": "Validate patch format before run_tests.", "parameters": {"type": "object", "properties": {"patch": {"type": "string"}}}}},
-    {"type": "function", "function": {"name": "run_tests", "description": "Run tests. Returns failure_summary when failing. Avoid repeated runs without narrowing.", "parameters": {"type": "object", "properties": {"eval_script": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["eval_script"]}}},
+    {"type": "function", "function": {"name": "run_tests", "description": "Run tests. Use after edit_file. Do not use for print/debug; use run_python_snippet for introspection.", "parameters": {"type": "object", "properties": {"eval_script": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["eval_script"]}}},
+    {"type": "function", "function": {"name": "run_python_snippet", "description": "Run short Python snippet in testbed env for cheap introspection and branch diagnostics.", "parameters": {"type": "object", "properties": {"code": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["code"]}}},
     {"type": "function", "function": {"name": "run_root_cause_analysis", "description": "Analyze failed run_tests output and return root-cause summary with code citations.", "parameters": {"type": "object", "properties": {"failure_summary": {"type": "string"}, "output": {"type": "string"}, "last_edit_file": {"type": "string"}}, "required": ["failure_summary"]}}},
     {"type": "function", "function": {"name": "get_patch", "description": "Get unified diff of changes. Use to inspect modifications before finalizing.", "parameters": {"type": "object", "properties": {}}}},
 ]
+_TOOL_BY_NAME = {t["function"]["name"]: t for t in SWEBENCH_TOOLS}
+
+
+def _select_tools_for_iteration(
+    *,
+    require_initial_root_estimation: bool,
+    require_action_after_snippet: bool,
+    require_rca_after_failure: bool,
+    force_edit_mode: bool,
+    pending_validation_after_edit: bool,
+    has_non_root_edit: bool,
+) -> tuple[list[dict], str]:
+    """
+    Phase-gated tool menu so the model sees only relevant actions.
+    """
+    if require_initial_root_estimation:
+        names = ["write_file", "edit_file"]
+        phase = "root_estimation"
+    elif require_action_after_snippet:
+        names = ["edit_file", "run_tests", "read_file"]
+        phase = "post_snippet_commit"
+    elif require_rca_after_failure:
+        names = ["run_root_cause_analysis"]
+        phase = "rca_required"
+    elif force_edit_mode:
+        names = ["edit_file", "read_file", "run_python_snippet"]
+        phase = "force_edit_after_exploration"
+    elif pending_validation_after_edit:
+        names = ["run_tests", "edit_file", "read_file"]
+        phase = "validate_after_edit"
+    else:
+        names = [
+            "list_files",
+            "search_code",
+            "find_relevant",
+            "search_symbol",
+            "read_file",
+            "run_python_snippet",
+            "edit_file",
+            "get_repo_tree",
+        ]
+        if has_non_root_edit:
+            names.append("run_tests")
+        phase = "discover_or_refine"
+
+    return ([_TOOL_BY_NAME[n] for n in names if n in _TOOL_BY_NAME], phase)
 
 
 def docker_pull(image: str) -> bool:
@@ -378,8 +467,15 @@ Hard constraints:
 - Avoid repeated exploration of the same symbols/files.
 - Do not create ad-hoc scratch files/scripts for diagnosis.
 - Maintain /testbed/ROOT.md as the authoritative running analysis and reference it when deciding edits.
-- After every failed run_tests, call run_root_cause_analysis before any other tool.
-- Use tools autonomously: get_repo_tree (first) -> focused search/read -> edit_file -> run_tests -> run_root_cause_analysis (on failures) -> get_patch."""
+- First action: write a root-cause estimation in /testbed/ROOT.md based on the problem statement.
+- Keep behavior target aligned to issue/tests. Do not change expected semantics ad hoc while debugging.
+- Primary exploration: list_files/search_code. Use get_repo_tree only as a fallback utility.
+- Decision rubric:
+  1) read_file/search_code to identify exact branch and guard condition,
+  2) propose minimal edit_file change,
+  3) run one focused test,
+  4) if failure: run_root_cause_analysis and update hypothesis.
+- Use tools autonomously: root analysis -> list_files/search_code/read_file -> edit_file -> focused run_tests -> run_root_cause_analysis (on failures) -> get_patch."""
 
         # Normalize line endings (problem may have \r\n from Windows)
         problem_clean = problem_statement.replace("\r", "")
@@ -391,6 +487,7 @@ Hard constraints:
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
+            {"role": "user", "content": "First step required: update /testbed/ROOT.md with your root-cause estimation from the problem before exploring files."},
         ]
 
         start = datetime.now()
@@ -403,10 +500,21 @@ Hard constraints:
         run_test_calls = 0
         canonical_run_tests_done = False
         require_rca_after_failure = False
+        require_initial_root_estimation = True
         last_failure_summary = ""
         last_failure_output = ""
         last_edit_file = ""
+        top_of_mind_failure_brief = ""
+        run_tests_without_edit = 0
+        require_action_after_snippet = False
+        snippet_followup_read_budget = 0
+        has_non_root_edit = False
+        pending_validation_after_edit = False
+        force_edit_mode = False
         consecutive_exploration_calls = 0
+        focused_test_command = ""
+        focused_test_passed = False
+        focused_attempted_since_failure = False
         tool_fingerprint_counts: dict[str, int] = {}
         edit_nudge_sent = False
         run_test_nudge_sent = False
@@ -472,19 +580,69 @@ Hard constraints:
             # Truncate context: keep system + first user + last 10 msgs (5 turns) to reduce tokens
             if len(messages) > 12:
                 messages = [messages[0], messages[1]] + messages[-10:]
-            _log_step(iteration, "SENT", json.dumps({"messages": messages}, indent=2, default=str, ensure_ascii=False))
+            if top_of_mind_failure_brief:
+                messages = [
+                    m
+                    for m in messages
+                    if not (m.get("role") == "user" and str(m.get("content", "")).startswith("TOP_OF_MIND:"))
+                ]
+                messages.append({"role": "user", "content": top_of_mind_failure_brief})
+            current_tools, phase_name = _select_tools_for_iteration(
+                require_initial_root_estimation=require_initial_root_estimation,
+                require_action_after_snippet=require_action_after_snippet,
+                require_rca_after_failure=require_rca_after_failure,
+                force_edit_mode=force_edit_mode,
+                pending_validation_after_edit=pending_validation_after_edit,
+                has_non_root_edit=has_non_root_edit,
+            )
+            allowed = ", ".join(t["function"]["name"] for t in current_tools)
+            phase_guard = {
+                "role": "system",
+                "content": (
+                    f"You are in phase '{phase_name}'. "
+                    f"You may call ONLY these tools: {allowed}. "
+                    "Do not call any other tool."
+                ),
+            }
+            call_messages = messages + [phase_guard]
+            _log_step(
+                iteration,
+                "SENT",
+                json.dumps(
+                    {
+                        "phase": phase_name,
+                        "tools": [t["function"]["name"] for t in current_tools],
+                        "messages": call_messages,
+                    },
+                    indent=2,
+                    default=str,
+                    ensure_ascii=False,
+                ),
+            )
             print("  Calling LLM...", flush=True)
             try:
                 completion = client.chat.completions.create(
                     model=model,
-                    messages=messages,
-                    tools=SWEBENCH_TOOLS,
+                    messages=call_messages,
+                    tools=current_tools,
                     tool_choice="auto",
                     max_tokens=args.max_tokens,
                     timeout=args.llm_timeout,
                 )
             except Exception as e:
                 err = str(e)
+                if "not in request.tools" in err or "tool call validation failed" in err:
+                    allowed = ", ".join(t["function"]["name"] for t in current_tools)
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"Tool call rejected. In this phase you may use only: {allowed}. "
+                            "Pick one of these tools and continue."
+                        ),
+                    })
+                    _log_step(iteration, "RETRY", f"tool-validation-error={err}")
+                    print("  Tool validation mismatch; retrying with phase-constrained reminder.")
+                    continue
                 if "401" in err or "Unauthorized" in err or "<!DOCTYPE" in err:
                     print("LLM Error: 401 Unauthorized. Set HF_TOKEN (huggingface.co/settings/tokens) or use --provider ollama", file=sys.stderr)
                 else:
@@ -544,7 +702,7 @@ Hard constraints:
                     print(f"  No tool calls (model returned text). Nudging...", flush=True)
                     messages.append({
                         "role": "user",
-                        "content": "Follow the flow: get_repo_tree -> find_relevant/search_symbol -> read_file -> edit_file -> run_tests -> run_root_cause_analysis on failure.",
+                        "content": "Follow the flow: update ROOT.md root-cause estimate -> list_files/search_code/read_file -> (optional run_python_snippet) -> edit_file -> run_tests -> run_root_cause_analysis on failure. get_repo_tree is utility-only.",
                     })
                     continue
                 else:
@@ -557,28 +715,120 @@ Hard constraints:
                 except json.JSONDecodeError:
                     args_dict = {}
                 args_dict.setdefault("base_path", "/testbed")
-                if require_rca_after_failure and name != "run_root_cause_analysis":
-                    blocked_text = (
-                        "Controller: run_tests failed. You must call run_root_cause_analysis next "
-                        "with failure_summary/output before any other tool."
-                    )
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": blocked_text,
-                    })
-                    print(f"  {name}: blocked (RCA required)")
-                    _log_step(iteration, f"TOOL {name}", f"args={args_dict}\nresult={blocked_text}")
-                    continue
+                if require_initial_root_estimation:
+                    target_fp = str(args_dict.get("filepath") or "")
+                    is_root_write = name in {"write_file", "edit_file"} and _is_root_filepath(target_fp)
+                    if not is_root_write:
+                        blocked_text = (
+                            "Controller: first action required. Write root-cause estimation into ROOT.md "
+                            "(ROOT.md or /testbed/ROOT.md) using write_file/edit_file before other tools."
+                        )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": blocked_text,
+                        })
+                        print(f"  {name}: blocked (initial ROOT.md required)")
+                        _log_step(iteration, f"TOOL {name}", f"args={args_dict}\nresult={blocked_text}")
+                        continue
+                    if name == "write_file" and not _has_meaningful_root_estimation(str(args_dict.get("content") or "")):
+                        blocked_text = (
+                            "Controller: ROOT.md update is too short. Add a real root-cause estimation "
+                            "(hypothesis, impacted code area, and expected failing behavior)."
+                        )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": blocked_text,
+                        })
+                        print("  write_file: blocked (ROOT analysis too short)")
+                        _log_step(iteration, "TOOL write_file", f"args={args_dict}\nresult={blocked_text}")
+                        continue
+                    if name == "edit_file" and not _has_meaningful_root_estimation(str(args_dict.get("new_str") or "")):
+                        blocked_text = (
+                            "Controller: ROOT.md edit is too short. Expand root-cause estimation "
+                            "before using other tools."
+                        )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": blocked_text,
+                        })
+                        print("  edit_file: blocked (ROOT analysis too short)")
+                        _log_step(iteration, "TOOL edit_file", f"args={args_dict}\nresult={blocked_text}")
+                        continue
+                if require_action_after_snippet:
+                    if name == "read_file" and snippet_followup_read_budget > 0:
+                        snippet_followup_read_budget -= 1
+                    elif name in {"edit_file", "run_tests"}:
+                        require_action_after_snippet = False
+                        snippet_followup_read_budget = 0
+                    else:
+                        blocked_text = (
+                            "Controller: introspection output is already available. "
+                            "Now apply edit_file (preferred) or run_tests. "
+                            "Do not continue broad exploration."
+                        )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": blocked_text,
+                        })
+                        print(f"  {name}: blocked (post-snippet action required)")
+                        _log_step(iteration, f"TOOL {name}", f"args={args_dict}\nresult={blocked_text}")
+                        continue
+                # RCA tool is optional now; failure brief is injected automatically as top-of-mind.
                 if name == "run_root_cause_analysis":
                     args_dict.setdefault("failure_summary", last_failure_summary)
                     args_dict.setdefault("output", last_failure_output)
                     args_dict.setdefault("last_edit_file", last_edit_file)
+                run_tests_mode = "full"
                 if name == "run_tests":
+                    requested_eval_raw = str(args_dict.get("eval_script") or "")
+                    if "print(" in requested_eval_raw or "python - <<'PY'" in requested_eval_raw or "python -c" in requested_eval_raw:
+                        blocked_text = (
+                            "Controller: run_tests is not for debug printing. "
+                            "Use run_python_snippet for introspection, then edit_file, then run_tests."
+                        )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": blocked_text,
+                        })
+                        print("  run_tests: blocked (use run_python_snippet for debug)")
+                        _log_step(iteration, "TOOL run_tests", f"args={args_dict}\nresult={blocked_text}")
+                        continue
+                    if run_tests_without_edit >= 2:
+                        blocked_text = (
+                            "Controller: too many run_tests without edit_file. "
+                            "Apply a focused edit_file first (or use run_python_snippet for one cheap diagnostic), then rerun tests."
+                        )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": blocked_text,
+                        })
+                        print("  run_tests: blocked (edit required)")
+                        _log_step(iteration, "TOOL run_tests", f"args={args_dict}\nresult={blocked_text}")
+                        continue
+                    if focused_test_command and not focused_attempted_since_failure:
+                        args_dict["eval_script"] = focused_test_command
+                        args_dict.pop("setup_script", None)
+                        args_dict.pop("test_command", None)
+                        run_tests_mode = "focused"
+                    elif focused_test_passed:
+                        # After focused pass, enforce a full-suite validation run.
+                        args_dict["eval_script"] = eval_script
+                        if setup_script is not None and test_command is not None:
+                            args_dict["setup_script"] = setup_script
+                            args_dict["test_command"] = test_command
+                        run_tests_mode = "full_after_focused_pass"
                     requested_eval = str(args_dict.get("eval_script") or "").strip()
                     requested_custom = bool(requested_eval) and requested_eval != eval_script.strip()
                     # Ensure one canonical run happens first (environment/setup), then allow custom reruns.
-                    if not canonical_run_tests_done:
+                    if run_tests_mode in {"focused", "full_after_focused_pass"}:
+                        pass
+                    elif not canonical_run_tests_done:
                         args_dict["eval_script"] = eval_script
                         if setup_script is not None and test_command is not None:
                             args_dict["setup_script"] = setup_script
@@ -602,7 +852,7 @@ Hard constraints:
                     args_dict["pattern"] = "def |class "
                 fp = f"{name}:{json.dumps(args_dict, sort_keys=True, default=str)}"
                 tool_fingerprint_counts[fp] = tool_fingerprint_counts.get(fp, 0) + 1
-                mcp_timeout = 600 if name == "run_tests" else 30
+                mcp_timeout = 600 if name == "run_tests" else (60 if name == "run_python_snippet" else 30)
                 result = call_mcp_tool(mcp_url, name, args_dict, timeout=mcp_timeout)
                 text = result["text"] if result["success"] else f"Error: {result.get('error', result['text'])}"
                 llm_text = _compact_tool_payload(name, text)
@@ -643,12 +893,40 @@ Hard constraints:
                     action_calls += 1
                 if name == "run_tests":
                     run_test_calls += 1
+                    run_tests_without_edit += 1
+                    pending_validation_after_edit = False
+                    force_edit_mode = False
+                    if run_tests_mode == "focused":
+                        focused_attempted_since_failure = True
                 if name == "edit_file":
                     last_edit_file = str(args_dict.get("filepath") or "")
+                    run_tests_without_edit = 0
+                    require_action_after_snippet = False
+                    snippet_followup_read_budget = 0
+                    force_edit_mode = False
+                    if _is_root_filepath(last_edit_file):
+                        require_initial_root_estimation = False
+                    else:
+                        has_non_root_edit = True
+                        pending_validation_after_edit = True
+                if name == "write_file":
+                    if _is_root_filepath(str(args_dict.get("filepath") or "")):
+                        require_initial_root_estimation = False
                 if name in EXPLORATION_TOOLS:
                     consecutive_exploration_calls += 1
                 else:
                     consecutive_exploration_calls = 0
+                if (
+                    consecutive_exploration_calls >= 3
+                    and not require_initial_root_estimation
+                    and not require_rca_after_failure
+                    and not require_action_after_snippet
+                ):
+                    force_edit_mode = True
+                    messages.append({
+                        "role": "user",
+                        "content": "Controller: exploration cap reached. Commit to a focused edit_file now.",
+                    })
                 if name == "get_patch" and result["success"]:
                     _delete_root_md()
                     solution = result["text"]
@@ -657,10 +935,22 @@ Hard constraints:
                         print("  Got patch")
                 if name == "run_root_cause_analysis" and result["success"]:
                     require_rca_after_failure = False
+                    force_edit_mode = False
                     try:
                         rca = json.loads(result["text"])
                     except Exception:
                         rca = {"summary": result["text"]}
+                    if (
+                        str(rca.get("suspected_return_path") or "").startswith("unknown")
+                        or str(rca.get("trigger_condition") or "").startswith("unknown")
+                    ):
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "RCA incomplete: provide exact return path and triggering guard condition "
+                                "for the wrong value. Use read_file/run_python_snippet as needed, then update RCA."
+                            ),
+                        })
                     rca_text = (
                         "# ROOT ANALYSIS\n\n"
                         "## Problem summary\n"
@@ -670,12 +960,43 @@ Hard constraints:
                         f"{json.dumps(rca, indent=2, ensure_ascii=False)}\n"
                     )
                     _write_root_md(rca_text)
+                    top_of_mind_failure_brief = (
+                        "TOP_OF_MIND: Root-cause analysis completed. Use cited evidence for the next focused edit."
+                    )
+                    pending_validation_after_edit = False
+                if name == "run_python_snippet" and result["success"]:
+                    require_action_after_snippet = True
+                    snippet_followup_read_budget = 1
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Controller: You now have introspection evidence. "
+                            "Pick one minimal edit_file change next (preferred), "
+                            "or run_tests to validate."
+                        ),
+                    })
                 if name == "run_tests" and result["success"]:
                     try:
                         r = json.loads(result["text"])
                         if r.get("success"):
+                            if run_tests_mode == "focused":
+                                focused_test_passed = True
+                                pending_validation_after_edit = True
+                                messages.append({
+                                    "role": "user",
+                                    "content": "Focused failing test passed. Now run full suite validation with run_tests.",
+                                })
+                                continue
                             _delete_root_md()
                             success = True
+                            require_rca_after_failure = False
+                            top_of_mind_failure_brief = ""
+                            require_action_after_snippet = False
+                            snippet_followup_read_budget = 0
+                            pending_validation_after_edit = False
+                            focused_test_command = ""
+                            focused_test_passed = False
+                            focused_attempted_since_failure = False
                             print("  Tests passed!")
                             # Use patch from run_tests (captured before eval script ran; eval may revert files)
                             if not solution:
@@ -686,24 +1007,15 @@ Hard constraints:
                             require_rca_after_failure = True
                             last_failure_summary = str(r.get("failure_summary") or "")
                             last_failure_output = str(r.get("output") or "")
-                            failed_tests = _extract_failed_tests_from_summary(last_failure_summary)
-                            actionable = _extract_actionable_failure_output(last_failure_output)
-                            analyze_lines = [
-                                "Controller directive: Analyze test failure and propose root cause now.",
-                            ]
-                            if failed_tests:
-                                analyze_lines.append(f"Failing tests: {', '.join(failed_tests)}")
-                            if last_failure_summary:
-                                analyze_lines.append(f"failure_summary:\n{last_failure_summary[:3000]}")
-                            if actionable:
-                                analyze_lines.append(f"failure_output:\n{actionable[:6000]}")
-                            analyze_lines.append(
-                                "Next step must be run_root_cause_analysis, then implement edit_file from that analysis."
+                            pending_validation_after_edit = False
+                            focused_node = _first_failing_test_nodeid(last_failure_summary)
+                            focused_test_command = f"python -m pytest {focused_node} -q" if focused_node else ""
+                            focused_test_passed = False
+                            focused_attempted_since_failure = False
+                            top_of_mind_failure_brief = _build_top_of_mind_failure_brief(
+                                last_failure_summary, last_failure_output, last_edit_file
                             )
-                            messages.append({
-                                "role": "user",
-                                "content": "\n\n".join(analyze_lines),
-                            })
+                            messages.append({"role": "user", "content": top_of_mind_failure_brief})
                     except Exception:
                         pass
 
@@ -720,13 +1032,6 @@ Hard constraints:
                         "content": "Controller: You must run run_tests now. Do not continue searching.",
                     })
                     run_test_nudge_sent = True
-                if consecutive_exploration_calls >= 6:
-                    messages.append({
-                        "role": "user",
-                        "content": "Controller: Repeated exploration detected. Pick one file, apply edit_file, and run_tests.",
-                    })
-                    consecutive_exploration_calls = 0
-
             # Exit outer loop when we have solution after tests passed
             if success and solution:
                 break

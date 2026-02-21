@@ -613,3 +613,25 @@ In agent frameworks, `BaseModel` provides:
 
 It turns "LLM text generation" into "structured software behavior."
 
+Today is the day... when I stopped with hugging face as I ran out of creditos.
+
+```python
+from google import genai
+
+client = genai.Client()
+
+response = client.models.generate_content(
+    model="gemini-3-flash-preview",
+    contents="Explain how AI works in a few words",
+)
+
+print(response.text)
+```
+> Friendship with google initiated [aistudio.google.com](https://aistudio.google.com/)
+
+Yaaaa
+
+
+my model is mpw this one: [Model starting 16.2.](https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-lite)
+
+

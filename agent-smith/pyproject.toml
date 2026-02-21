@@ -5,6 +5,8 @@ description = "42 AI agent project"
 requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0",
+    "docker>=7.0.0",
+    "google-genai>=1.0",
     "moulinette-master",
 ]
 
@@ -21,4 +23,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["scripts", "agent_mbpp", "MCP", "tools"]
+include = ["scripts", "agent_mbpp", "agent_swebench", "llm", "MCP", "tools"]

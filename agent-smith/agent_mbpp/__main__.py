@@ -9,8 +9,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from openai import OpenAI
-
+from llm.provider import get_client, get_provider_config
 from tools.pydantic_models import MBPPTaskInput, SolutionOutput, StepMetrics
 
 DEFAULT_MCP_URL = "http://localhost:8765"
@@ -77,10 +76,18 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="Path to write solution JSON")
     parser.add_argument("--mcp-server", default=os.environ.get("MCP_SERVER_URL", DEFAULT_MCP_URL), help="MCP server URL")
     parser.add_argument("--max-iterations", type=int, default=MAX_ITERATIONS, help=f"Max generation attempts (hard limit: {MAX_ITERATIONS})")
-    parser.add_argument("--model", default="moonshotai/Kimi-K2-Instruct-0905", help="Model name")
-    parser.add_argument("--api-url", default=os.environ.get("OPENAI_BASE_URL", "https://router.huggingface.co/v1"))
-    parser.add_argument("--api-tokens", default=os.environ.get("HF_TOKEN", os.environ.get("OPENAI_API_KEY", "")))
+    parser.add_argument("--provider", default=os.environ.get("LLM_PROVIDER", "google"), help="LLM provider: huggingface, google, openai")
+    parser.add_argument("--model", help="Model name (default from provider)")
+    parser.add_argument("--api-url", help="Override API base URL")
+    parser.add_argument("--api-tokens", help="Override API key")
     args = parser.parse_args()
+
+    cfg = get_provider_config(
+        provider=args.provider,
+        base_url=args.api_url,
+        api_key=args.api_tokens,
+    )
+    model = args.model or cfg.default_model
 
     with open(args.task_file) as f:
         task = MBPPTaskInput.model_validate(json.load(f))
@@ -119,7 +126,7 @@ Public tests (your solution must pass these):
         base_prompt += "\n".join(test_list)
 
     start = datetime.now()
-    client = OpenAI(base_url=args.api_url, api_key=args.api_tokens)
+    client = get_client(provider=args.provider, base_url=args.api_url, api_key=args.api_tokens)
     steps: list[StepMetrics] = []
     total_input = 0
     total_output = 0
@@ -145,7 +152,7 @@ Public tests (your solution must pass these):
 
         print(f"\n--- Iteration {iteration} ---")
         try:
-            completion = client.chat.completions.create(model=args.model, messages=messages)
+            completion = client.chat.completions.create(model=model, messages=messages)
         except Exception as e:
             print(f"LLM Error: {e}", file=sys.stderr)
             result = SolutionOutput(

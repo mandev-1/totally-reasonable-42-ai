@@ -35,12 +35,35 @@ def handle_tools_call(params: dict, request_id: int) -> dict:
             )
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
 
+        elif tool_name == "write_file":
+            result = file_system.write_file(
+                base_path,
+                arguments["filepath"],
+                arguments["content"],
+            )
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
+
+        elif tool_name == "delete_file":
+            result = file_system.delete_file(
+                base_path,
+                arguments["filepath"],
+            )
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
+
         elif tool_name == "edit_file":
             result = file_system.edit_file(
                 base_path,
                 arguments["filepath"],
                 arguments["old_str"],
                 arguments["new_str"],
+            )
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
+
+        elif tool_name == "get_repo_tree":
+            result = file_system.get_repo_tree(
+                base_path,
+                arguments.get("max_depth", 4),
+                arguments.get("max_lines", 400),
             )
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
 
@@ -52,6 +75,15 @@ def handle_tools_call(params: dict, request_id: int) -> dict:
             )
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
 
+        elif tool_name == "find_relevant":
+            result = code_search.find_relevant(
+                base_path,
+                arguments["keywords"],
+                arguments.get("max_files", 5),
+                arguments.get("context_lines", 5),
+            )
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
+
         elif tool_name == "search_code":
             result = code_search.search_code(
                 base_path,
@@ -60,7 +92,7 @@ def handle_tools_call(params: dict, request_id: int) -> dict:
             )
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
 
-        elif tool_name == "search_function_or_class_definition_in_code":
+        elif tool_name in ("search_symbol", "search_function_or_class_definition_in_code"):
             result = code_search.search_function_or_class_definition_in_code(
                 base_path,
                 arguments["name"],
@@ -76,11 +108,26 @@ def handle_tools_call(params: dict, request_id: int) -> dict:
             )
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": result}]}}
 
-        elif tool_name == "run_tests":
+        elif tool_name == "validate_patch":
+            r = execution.validate_patch(base_path, arguments.get("patch", ""))
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(r)}]}}
+
+        elif tool_name in ("run_tests", "run_tests_with_failure_summary"):
             r = execution.run_tests(
                 base_path,
                 arguments["eval_script"],
                 arguments.get("timeout", 1800),
+                setup_script=arguments.get("setup_script"),
+                test_command=arguments.get("test_command"),
+            )
+            return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(r)}]}}
+
+        elif tool_name == "run_root_cause_analysis":
+            r = execution.run_root_cause_analysis(
+                base_path,
+                arguments.get("failure_summary", ""),
+                arguments.get("output", ""),
+                arguments.get("last_edit_file", ""),
             )
             return {"jsonrpc": "2.0", "id": request_id, "result": {"content": [{"type": "text", "text": json.dumps(r)}]}}
 
@@ -95,38 +142,60 @@ def handle_tools_call(params: dict, request_id: int) -> dict:
         return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32000, "message": str(e)}}
 
 
+# SWE-bench optimized. recommended_workflow: get_repo_tree -> find_relevant -> search_symbol -> read_file -> edit_file -> get_patch -> run_tests
+
 TOOLS = [
     {
-        "name": "read_file",
-        "description": "Read file content with line numbers (cat -n format). Output: <line_number>: <line_content>",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "base_path": {"type": "string", "description": "Testbed root (default: TESTBED_PATH or /testbed)"},
-                "filepath": {"type": "string", "description": "Path relative to base"},
-                "start_line": {"type": "integer", "description": "First line (1-based)"},
-                "end_line": {"type": "integer", "description": "Last line (1-based)"},
-            },
-            "required": ["filepath"],
-        },
-    },
-    {
-        "name": "edit_file",
-        "description": "Replace exact string in file",
+        "name": "get_repo_tree",
+        "description": "FIRST STEP for most tasks. Returns indented tree of the repository to understand structure and locate likely source/test directories. Use before reading files to avoid blind exploration.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "base_path": {"type": "string"},
-                "filepath": {"type": "string"},
-                "old_str": {"type": "string"},
-                "new_str": {"type": "string"},
+                "max_depth": {"type": "integer", "default": 4},
+                "max_lines": {"type": "integer", "default": 400},
             },
-            "required": ["filepath", "old_str", "new_str"],
+        },
+    },
+    {
+        "name": "find_relevant",
+        "description": "PRIMARY SEARCH TOOL for debugging tasks. Provide space-separated keywords from the problem (e.g. 'session headers Accept-Encoding'). Returns top matching files with surrounding context. Prefer this over multiple search_code calls when starting from a natural-language bug report.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "keywords": {"type": "string"},
+                "max_files": {"type": "integer", "default": 5},
+                "context_lines": {"type": "integer", "default": 5},
+            },
+            "required": ["keywords"],
+        },
+    },
+    {
+        "name": "search_symbol",
+        "description": "Locate the definition of a function or class by name. Use after identifying a relevant symbol to jump directly to its implementation. Helps avoid scanning entire files manually.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"base_path": {"type": "string"}, "name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "search_code",
+        "description": "Regex-based search across files (output: /path/file.py:line_number line_content). Use when you know the exact symbol, string, or pattern to locate. Not ideal for vague natural-language queries — prefer find_relevant first.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "pattern": {"type": "string"},
+                "file_pattern": {"type": "string", "default": "*.py"},
+            },
+            "required": ["pattern"],
         },
     },
     {
         "name": "list_files",
-        "description": "List files in directory matching pattern",
+        "description": "List files in a directory matching a glob pattern. Useful when you already know the relevant directory and want to filter by extension (e.g. *.py, test_*.py). Prefer get_repo_tree for initial exploration.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -137,30 +206,8 @@ TOOLS = [
         },
     },
     {
-        "name": "search_code",
-        "description": "Grep-like search. Output: /path/file.py:line_number line_content",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "base_path": {"type": "string"},
-                "pattern": {"type": "string", "description": "Regex pattern"},
-                "file_pattern": {"type": "string", "default": "*.py"},
-            },
-            "required": ["pattern"],
-        },
-    },
-    {
-        "name": "search_function_or_class_definition_in_code",
-        "description": "Find definition of function or class",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"base_path": {"type": "string"}, "name": {"type": "string"}},
-            "required": ["name"],
-        },
-    },
-    {
         "name": "find_references",
-        "description": "Find all usages of a symbol",
+        "description": "Find all usages of a symbol in the repository. Requires a known definition location (filepath and line). Use to understand impact of modifying a function/class before editing.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -173,26 +220,114 @@ TOOLS = [
         },
     },
     {
-        "name": "run_tests",
-        "description": "Execute the evaluation script in the testbed",
+        "name": "read_file",
+        "description": "Read file content with line numbers (<line_number>: <line_content>). Use only after narrowing down likely relevant files via get_repo_tree, find_relevant, or search_code. Avoid reading large files entirely — prefer specifying start_line and end_line when possible.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "base_path": {"type": "string"},
-                "eval_script": {"type": "string", "description": "Bash script to run tests"},
+                "filepath": {"type": "string"},
+                "start_line": {"type": "integer"},
+                "end_line": {"type": "integer"},
+            },
+            "required": ["filepath"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": "Replace an exact string in an existing file. old_str must match exactly (including whitespace). Always read the file first to confirm formatting before editing. Use for precise, minimal modifications to reduce patch size and regression risk.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "filepath": {"type": "string"},
+                "old_str": {"type": "string"},
+                "new_str": {"type": "string"},
+            },
+            "required": ["filepath", "old_str", "new_str"],
+        },
+    },
+    {
+        "name": "write_file",
+        "description": "Create or overwrite a file. Use primarily for creating new files. Prefer edit_file when modifying existing files to minimize unintended changes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "filepath": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["filepath", "content"],
+        },
+    },
+    {
+        "name": "delete_file",
+        "description": "Delete a file if it exists. Use for temporary controller artifacts (e.g. ROOT.md) before finalizing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "filepath": {"type": "string"},
+            },
+            "required": ["filepath"],
+        },
+    },
+    {
+        "name": "validate_patch",
+        "description": "Validate patch format before run_tests. Pass patch text from get_patch. Returns {valid, message}. Use to catch format errors early.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "patch": {"type": "string"},
+            },
+        },
+    },
+    {
+        "name": "run_tests",
+        "description": "Run the test suite using the provided evaluation script. Use after implementing a plausible fix. Avoid repeated runs without narrowing scope — tests are expensive. Returns structured JSON with success/message/output/patch and failure_summary on failures.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "eval_script": {"type": "string"},
                 "timeout": {"type": "integer", "default": 1800},
             },
             "required": ["eval_script"],
         },
     },
     {
+        "name": "run_root_cause_analysis",
+        "description": "Analyze failed run_tests output. Returns root cause summary, failing tests, evidence lines, and code citations. Call immediately after run_tests failure.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "base_path": {"type": "string"},
+                "failure_summary": {"type": "string"},
+                "output": {"type": "string"},
+                "last_edit_file": {"type": "string"},
+            },
+            "required": ["failure_summary"],
+        },
+    },
+    {
         "name": "get_patch",
-        "description": "Retrieve unified git diff of all changes in the repository",
+        "description": "Retrieve the unified git diff of all repository changes. Use to inspect and verify your modifications before running tests or finalizing a solution. Helps detect unintended edits.",
         "inputSchema": {
             "type": "object",
             "properties": {"base_path": {"type": "string"}},
         },
     },
+]
+
+RECOMMENDED_WORKFLOW = [
+    "get_repo_tree",
+    "find_relevant",
+    "search_symbol",
+    "read_file",
+    "edit_file",
+    "get_patch",
+    "run_tests",
 ]
 
 
@@ -209,7 +344,10 @@ def handle_request(request: dict) -> dict:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "serverInfo": {"name": "swe-tools-mcp-server", "version": "1.0.0"},
-                "capabilities": {"tools": {}},
+                "capabilities": {
+                    "tools": {},
+                    "recommended_workflow": RECOMMENDED_WORKFLOW,
+                },
             },
         }
 
@@ -244,10 +382,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         pass
 
 
-def run_http(port: int = 8766):
-    """Run MCP server on HTTP."""
-    server = HTTPServer(("localhost", port), MCPHTTPHandler)
-    print(f"SWE-tools MCP server running on http://localhost:{port}", file=sys.stderr)
+def run_http(port: int = 8766, host: str = "0.0.0.0"):
+    """Run MCP server on HTTP. Use 0.0.0.0 to accept connections from Docker host."""
+    server = HTTPServer((host, port), MCPHTTPHandler)
+    print(f"SWE-tools MCP server running on http://{host}:{port}", file=sys.stderr)
     print(f"Set TESTBED_PATH for testbed root. Connect with: uv run sandbox --mcp-server http://localhost:{port}", file=sys.stderr)
     try:
         server.serve_forever()
@@ -259,8 +397,9 @@ def run_http(port: int = 8766):
 def main():
     parser = argparse.ArgumentParser(description="SWE-tools MCP server")
     parser.add_argument("--port", type=int, default=8766, help="HTTP port (default: 8766)")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0 for Docker)")
     args = parser.parse_args()
-    run_http(args.port)
+    run_http(args.port, args.host)
 
 
 if __name__ == "__main__":
